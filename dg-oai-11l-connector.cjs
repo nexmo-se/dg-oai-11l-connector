@@ -58,6 +58,32 @@ const elevenLabsModel = process.env.ELEVENLABS_MODEL;
 const elevenLabsInactivityTimer = 180; // in seconds, 180 max, default is 20
 const elevenLabsKeepAliveTimer = 150000; // in milliseconds, must be less than elevenLabsInactivityTimer value
 
+//--- Streaming timer calculation ---
+
+let prevTime = Date.now();
+let counter = 0;
+let total = 0;
+let cycles = 2000; // ~ 38 seconds measurement time
+
+console.log('\n>>> Wait around', Math.round(cycles * timer / 1000), 'seconds to see the actual streaming timer average ...\n');
+
+const streamTimer = setInterval ( () => {
+    
+    const timeNow = Date.now();
+    const difference = timeNow - prevTime;
+    total = total + difference;
+    prevTime = timeNow;
+
+    counter++;
+
+    if (counter == cycles) { 
+        clearInterval(streamTimer);
+        console.log('\n>>> Average streaming timer (should be close to 20 AND under 20.000:', total / counter);
+    };
+
+}, timer);
+
+
 //--- Websocket server (for WebSockets from Vonage Voice API platform) ---
 
 app.ws('/socket', async (ws, req) => {
