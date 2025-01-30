@@ -63,7 +63,7 @@ const elevenLabsKeepAliveTimer = 150000; // in milliseconds, must be less than e
 let prevTime = Date.now();
 let counter = 0;
 let total = 0;
-let cycles = 2000; // ~ 38 seconds measurement time
+let cycles = 2000;
 
 console.log('\n>>> Wait around', Math.round(cycles * timer / 1000), 'seconds to see the actual streaming timer average ...\n');
 
@@ -78,7 +78,7 @@ const streamTimer = setInterval ( () => {
 
     if (counter == cycles) { 
         clearInterval(streamTimer);
-        console.log('\n>>> Average streaming timer (should be close to 20 AND under 20.000:', total / counter);
+        console.log('\n>>> Average streaming timer (should be close to 20 AND under 20.000):', total / counter);
     };
 
 }, timer);
