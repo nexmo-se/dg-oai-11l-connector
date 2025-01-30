@@ -239,7 +239,7 @@ app.ws('/socket', async (ws, req) => {
 
   let deepgram = deepgramClient.listen.live({       
     model: "nova-2",
-    smart_format: true,      
+    smart_format: false,      
     language: "en-US",        
     encoding: "linear16",
     sample_rate: 16000,
