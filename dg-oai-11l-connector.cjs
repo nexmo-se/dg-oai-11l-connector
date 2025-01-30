@@ -26,11 +26,6 @@ app.use(function (req, res, next) {
   next();
 });
 
-//--- Audio silence payload for linear 16, 16 kHz, mono ---
-
-const hexSilencePayload = "f8ff".repeat(320);
-const silenceAudioPayload = Buffer.from(hexSilencePayload, "hex"); // 640-byte payload for 20 ms of silence - 16 bits - 16 kHz - PCM
-
 //--- Record all audio ? --
 
 let recordAllAudio = false;
@@ -137,23 +132,9 @@ app.ws('/socket', async (ws, req) => {
         };
       } else {
         streamToVgIndex = streamToVgIndex - 640; // prevent index from increasing for ever as it is beyond buffer current length
-        
-        // nowTime = Date.now();
-        // console.log('>> interval:', nowTime - lastTime, 'ms');
-        // if (wsVgOpen) {
-        //   ws.send(silenceAudioPayload);
-        // }; 
-        // lastTime = nowTime;
       }
 
     } 
-    // else {
-
-    //   if (wsVgOpen) {
-    //     ws.send(silenceAudioPayload);
-    //   };  
-    
-    // } 
 
   }, timer);
 
@@ -170,7 +151,7 @@ app.ws('/socket', async (ws, req) => {
   //--
 
   elevenLabsWs.on('error', async (event) => {
-    console.log('>>> ElevenLabs WebSocket to OpenAI error:', event);
+    console.log('>>> ElevenLabs WebSocket error:', event);
   }); 
 
   //--
