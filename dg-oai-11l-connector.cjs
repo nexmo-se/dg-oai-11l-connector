@@ -97,7 +97,11 @@ app.ws('/socket', async (ws, req) => {
   let wsVgOpen = true; // WebSocket to Vonage ready for binary audio payload?
 
   let isDgPartialTranscript = false;
-  let dgTranscript = "";  
+  let dgTranscript = ""; 
+
+  let startSpeech = false;
+  let dropTtsChunks = false;
+  let newResponseStart = '';  // first sentence of OpenAI new streamed responsse
 
   //-- audio recording files -- 
   const audioToDgFileName = './recordings/' + peerUuid + '_rec_to_dg_' + moment(Date.now()).format('YYYY_MM_DD_HH_mm_ss_SSS') + '.raw'; // using local time
@@ -142,7 +146,7 @@ app.ws('/socket', async (ws, req) => {
             nowTime = Date.now();
             
             // console.log('>> interval:', nowTime - lastTime, 's');
-            process.stdout.write(".");
+            // process.stdout.write(".");
             
             ws.send(streamToVgPacket);
             lastTime = nowTime;
@@ -221,10 +225,43 @@ app.ws('/socket', async (ws, req) => {
       
       const newAudioPayloadToVg = Buffer.from(data.audio, 'base64');
 
-      console.log('\n>>>', Date.now(), 'Received audio payload from ElevenLabs:', newAudioPayloadToVg.length, 'bytes');
+      // console.log('\n>>>', Date.now(), 'Received audio payload from ElevenLabs:', newAudioPayloadToVg.length, 'bytes');
 
-      if(wsVgOpen) {
+      if (startSpeech) {
+        dropTtsChunks = true;
+      }
+
+      if (wsVgOpen) {
+
+        if (dropTtsChunks) {
+
+          const textArray = data.alignment.chars;
+
+          // take first 15 chars or less
+          const textLength = Math.min(textArray.length, 15);
+
+          let receivedTtsText = '';
+
+          for (let i = 0; i < textLength; i++) {
+            receivedTtsText = receivedTtsText + textArray[i];
+          }
+
+          // console.log(receivedTtsText);
+
+          // analyze packets contents
+          // drop all packets until finding first sentence of new response
+
+          if ( receivedTtsText == newResponseStart.slice(0, textLength) ) {
+            dropTtsChunks = false;
+            payloadToVg = Buffer.concat([payloadToVg, newAudioPayloadToVg]);
+          }
+
+        } else {
+
         payloadToVg = Buffer.concat([payloadToVg, newAudioPayloadToVg]);
+      
+        }
+
       }
       
     } else {
@@ -277,8 +314,6 @@ app.ws('/socket', async (ws, req) => {
     console.log(">>> WebSocket to DeepGram opened");
 
     deepgram.addListener(LiveTranscriptionEvents.Transcript, async (data) => {
-      
-      // console.log('\n>>> Deepgram events:', JSON.stringify(data));
 
       if (data.type != "Results") {
         console.log('\n>>> Deepgram event:', JSON.stringify(data));  
@@ -291,6 +326,10 @@ app.ws('/socket', async (ws, req) => {
 
       //--
 
+      // if (transcript != '') {
+      //   console.log("transcript:", transcript);
+      // }
+
       // if (transcript != "" && !transcriptFinal && !speechFinal && !isDgPartialTranscript) {
       if (transcript != "" && !isDgPartialTranscript) {  
 
@@ -299,6 +338,15 @@ app.ws('/socket', async (ws, req) => {
         // trigger barge-in
         payloadToVg = Buffer.alloc(0);  // reset stream buffer to VG
         streamToVgIndex = 0;  
+
+        // flag used to decide sending or not OpenAI response chunks to ElevenLabs TTS
+        startSpeech = true;
+
+        // flag used to drop remaining TTS response packets from previous request
+        // dropTtsChunks = true;
+
+        // reset content
+        newResponseStart = '';
 
       };  
 
@@ -322,21 +370,79 @@ app.ws('/socket', async (ws, req) => {
                       content: dgTranscript,
                   },
               ],
+              stream: true
           });
 
           dgTranscript = "";
 
-          const oAiTextResponse = completion.choices[0].message.content;
+          //-- this is with stream: false
+          // const oAiTextResponse = completion.choices[0].message.content;
           // console.log('\n>>> OpenAI response:', oAiTextResponse);
+          // if (ws11LabsOpen) {
+          //   console.log('\n\n>>>', Date.now(), 'Sending OpenAI response to ElevenLabs for TTS:\n', oAiTextResponse);
+          //   elevenLabsWs.send(JSON.stringify({text: oAiTextResponse}));
+          // }
 
-          //-------------
+          //-- this is with stream: true -- barge-in is also handled
 
-          // send OpenAI reply to ElevenLabs
+          let oAiSentence = '';
 
-          if (ws11LabsOpen) {
-            console.log('\n\n>>>', Date.now(), 'Sending OpenAI response to ElevenLabs for TTS:\n', oAiTextResponse);
-            elevenLabsWs.send(JSON.stringify({text: oAiTextResponse}));
-          }
+          for await (const chunk of completion) {
+
+            if (chunk.choices[0]?.delta?.content == '') {
+              startSpeech = false;  // no barge-in yet when starting sending text to TTS engine
+            }
+
+            //-- send text to ElevenLabs 
+            if ( chunk.choices[0]?.delta?.content != undefined ) {
+
+              if (startSpeech) {  // barge-in
+                
+                // flag used to drop remaining TTS response packets from previous request
+                dropTtsChunks = true;
+                
+                break;  // stop sending text response chunks to ElevenLabs
+              }
+     
+              const oAiResponseChunk = chunk.choices[0]?.delta?.content;
+              // process.stdout.write(oAiResponseChunk);
+
+              oAiSentence = oAiSentence + oAiResponseChunk;
+
+              // faster response time for English
+              // TBD: find end of sentence marker in other languages
+              if (oAiResponseChunk == '.' || oAiResponseChunk == '?') {
+
+                if (newResponseStart == '') {
+                  newResponseStart = oAiSentence; // set with first sentence of OpenAI response
+                }
+
+                console.log("\nSentence sent to ElevenLabs:\n", oAiSentence);
+                elevenLabsWs.send(JSON.stringify({text: oAiSentence})); 
+                
+                oAiSentence = '';     
+              }
+            
+            }
+
+            //--- end of text response stream from OpenAI 
+            if (chunk.choices[0]?.delta?.content == undefined) {
+
+              // in case no character '.' or '?' was found, send sentence(s) to ElevenLabs
+              if (oAiSentence != '') {
+              
+                console.log("\nSentence sent to ElevenLabs:\n", oAiSentence);
+                elevenLabsWs.send(JSON.stringify({text: oAiSentence})); 
+                
+                oAiSentence = '';
+              }    
+
+              //-- can send OpenAI response chunks to ElevenLabs again
+              startSpeech = false;     
+
+            }
+
+          } // closing bracket for await
 
         }
       }   
