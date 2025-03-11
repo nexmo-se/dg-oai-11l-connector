@@ -539,7 +539,7 @@ app.ws('/socket', async (ws, req) => {
 
 });
 
-//--- If this application is hosted on VCR (Vonage Code Runtime) serverless infrastructure --------
+//--- If this application is hosted on VCR (Vonage Cloud Runtime) serverless infrastructure --------
 
 app.get('/_/health', async(req, res) => {
 
