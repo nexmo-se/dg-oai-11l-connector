@@ -2,11 +2,11 @@
 
 ## What this Connector application does
 
-This Connector application allows [Voice](https://www.vonage.com/communications-apis/voice/) or [Video](https://www.vonage.com/communications-apis/video/) calls to interact via voice with a text-based [OpenAI LLM](https://platform.openai.com/docs/guides/text?api-mode=chat) using [Deepgram STT](https://deepgram.com/product/speech-to-text) and [ElevenLabs TTS](https://elevenlabs.io/text-to-speech).
+This Connector application allows [Voice](https://www.vonage.com/communications-apis/voice/) or [Video](https://www.vonage.com/communications-apis/video/) calls to interact via voice with an OpenAI LLM using [OpenAI Text Generation API](https://platform.openai.com/docs/guides/text?api-mode=chat), [Deepgram STT](https://deepgram.com/product/speech-to-text), and [ElevenLabs TTS](https://elevenlabs.io/text-to-speech).
 
 A User interacts with the OpenAI LLM (aka Agent) using voice. Real-time transcripts of what the User says as well what the Agent says are also returned.
 
-Barge-in is supported, meaning if User resumes speaking, an Agent voice response in progress would be immediately interrupted, and the response to the new request is played.
+Barge-in is supported, meaning if User resumes speaking, an Agent voice response in progress would be interrupted, and the response to the new request is played.
 
 Vonage API platform supports different **voice channels** for connecting to the Agent, including:
 - Public Switched Telephone Network (**PSTN**), e.g. cell phones, landline phones, VoIP phones/applications connecting via PSTN,
@@ -22,128 +22,111 @@ See the diagram **_dg-oai-11l-architecture-overview.png_**.</br>
 In this diagram, the Connector application is shown on the left side of the diagram.</br>
 
 First, a call is established with the User, it can be an inbound call or an outbound call,</br>
-then a WebSocket leg is established with the Connector (part 1) which sends the audio from the User to Deepgram Voice Agent (DG VA).</br>
+then a [WebSocket](https://developer.vonage.com/en/voice/voice-api/concepts/websockets) leg is established with the Connector which sends the audio from the User to Deepgram STT.</br>
 
-Received audio from DG VA are sent to the User.
+Original speech transcripts reveived from Deegram are sent to OpenAI.</br>
 
-Received User and Agent transcriptions are sent to the Orchestrator (part 2).</br>
+Text responses received from OpenAI are sent to ElevenLabs.</br>
+
+Speech synthesis received from ElevenLabs are sent to the User through the WebSocket leg and the original voice channel leg.</br>
+
+Received audio from DG VA are sent to the User.</br>
+
+Optionally, User's original speech transcripts and Agent's text responses are forwarded to the Voice API application.</br>
+
+See https://github.com/nexmo-se/voice-to-ai-engines for a **sample Voice API application** using this Connector code to stream audio from voice calls to Deepgram ASR engine.
+
+## Prerequisites
+
+### Get your credentials from Deepgram
+
+Sign up with or log in to [Deepgram](https://deepgram.com).</br>
+
+Create or use an existing Deepgram API key,</br>
+take note of it (as it will be needed as **`DEEPGRAM_API_KEY`** in the next section).</br>
+
+### Get your credentials from OpenAI
+
+Sign up with or log in to [OpenAI](https://auth.openai.com/log-in).</br>
+
+Create or use an existing OpenAI [API key](https://platform.openai.com/settings/organization/api-keys),</br>
+take note of it (as it will be needed as **`OPENAI_API_KEY`** in the next section).</br>
+
+### Get your credentials from ElevenLabs
+
+Sign up with or log in to [ElevenLabs](https://elevenlabs.io/app/sign-in).</br>
+
+Create or use an existing ElevenLabs [API key](https://elevenlabs.io/app/settings/api-keys),</br>
+take note of it (as it will be needed as **`ELEVENLABS_API_KEY`** in the next section).</br>
 
 
-## Set up
+## Deployment
 
-You may choose to deploy locally on your computer for testing, then or directly, in a cloud hosted environment as explained as follows.
+You may choose to deploy locally on your computer for testing, then or directly, to a cloud hosted environment as explained as follows.
 
 ### Local deployment on your computer
 
 #### Node.js
 
-[Download and install Node.js](https://nodejs.org/en/download/package-manager) version 18.
+[Download and install Node.js](https://nodejs.org/en/download/package-manager).
 
-This Node.js application has been tested with Node.js version 18.19.1.
+This application has been tested with Node.js version 18.19.
 
 #### Ngrok
 
-[Download and install ngrok](https://ngrok.com/download), an Internet tunelling service.</br>
-Sign in or sign up with [ngrok](https://ngrok.com/), from the menu, follow the **Setup and Installation** guide.
+For a `local deployment`, you may use ngrok (an agent endpoint service) for both this Connector application and the sample [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines) with [multiple ngrok agent endpoints](https://ngrok.com/docs/traffic-policy/getting-started/agent-endpoints/config-file/).
 
-Set up a domain to forward to the local port 8000 (as this application will be listening on local port 8000).
+[Download and install ngrok](https://ngrok.com/downloads).</br>
+Sign in or sign up with [ngrok](https://ngrok.com/), follow the [Quickstart](https://ngrok.com/docs/getting-started/) guide.
 
-Start ngrok to listen on port 8000,</br>
-please take note of the ngrok **Enpoint URL** as it will be need in the next sections,
+Set up two domains, one to forward to the local port 6000 (as this Connector application will be listening on port 6000), the other one to the local port 8000 for the sample [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines).
+
+
+Start ngrok to start both tunnels that forward to local ports 6000 and 8000,</br>
+please take note of the ngrok **Enpoint URL** that forwards to local port 6000 as it will be needed when setting the [Voice API application](https://github.com/nexmo-se/voice-app-websockets),
 that URL looks like:</br>
-`https://xxxxxxxx.ngrok.io`
+`xxxxxxxx.ngrok.io`, `myserver.mycompany.com:32000`  (as **`PROCESSOR_SERVER`** in the .env file of the [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines)),</br>
+no `port` is necessary with ngrok as public hostname,</br>
+that host name to specify must not have leading protocol text such as https://, wss://, nor trailing /.
 
-#### Deepgram
+#### Remaining setup and application launch
 
-Sign in or sign up with [Deepgram](https://deepgram.com/).
+Copy the `.env.example` file over to a new file called `.env`:
+```bash
+cp .env.example .env
+```
+Update parameter arguments in .env file as per previous sections contents, including:<br>
+**`DEEPGRAM_API_KEY`**<br>
+**`OPENAI_API_KEY`**<br>
+**`ELEVENLABS_API_KEY`**<br>
 
-Create or use an existing project, then create or retrieve an existing API key.
 
-For the next steps, you will need:</br>
-- The Deegpram **API key** (as environment variable **`DEEPGRAM_API_KEY`**)</br>
-
-#### Vonage API Account - Voice API Application
-
-[Log in to your](https://ui.idp.vonage.com/ui/auth/login) or [sign up for a](https://ui.idp.vonage.com/ui/auth/registration) Vonage API account.
-
-Go to [Your applications](https://dashboard.nexmo.com/applications), access an existing application or [+ Create a new application](https://dashboard.nexmo.com/applications/new).
-
-Under Capabilities section (click on [Edit] if you do not see this section):
-
-Enable Voice</br>
-
-- Under Answer URL, leave HTTP GET, and enter</br>
-`https://<host>:<port>/answer`</br>
-(replace \<host\> and \<port\> with the public host name and if necessary public port of the server where this sample application is running)</br>
-
-- Under Event URL, **select** HTTP POST, and enter</br>
-`https://<host>:<port>/event`</br>
-(replace \<host\> and \<port\> with the public host name and if necessary public port of the server where this sample application is running)</br>
-
-Note: If you are using ngrok for this sample application, the Answer URL and Event URL look like:</br>
-`https://xxxxxxxx.ngrok.io/answer`</br>
-`https://xxxxxxxx.ngrok.io/event`</br> 
-
-- Under Region, select a region, please take note of your selection,	
-
-- Click on [Generate public and private key] if you did not yet create or want new ones, save the private key file in this application folder as .private.key (leading dot in the file name).</br>
-
-**IMPORTANT**: Do not forget to click on [Save changes] at the bottom of the screen if you have created a new key set.</br>
-
-- Link a phone number to this application if none has been linked to the application.
-
-For the next steps, you will need:</br>
-- The [account API key](https://dashboard.nexmo.com/settings) (as environment variable **`API_KEY`**)</br>
-- The [account API secret](https://dashboard.nexmo.com/settings), not signature secret, (as environment variable **`API_SECRET`**)</br>
-- The **`application ID`** (as environment variable **`APP_ID`**),</br>
-- The selected **`Region`** (as environment variable **`API_REGION`**),</br>
-- The **`phone number linked`** to your application (as environment variable **`SERVICE_PHONE_NUMBER`**).</br>
-
-Copy or rename .env-example to .env<br>
-
-Update all the parameters in .env file as per previous sections contents.<br>
-
-Install node modules with the command:<br>
+Install necessary node modules with the command:<br>
  ```bash
 npm install
 ```
 
-Launch the application:<br>
+Launch this Connector application:<br>
 ```bash
-node vonage-deepgram-voice-agent.cjs
+node dg-oai-11l-connector.cjs
 ```
-Default local (not public!) of this application listening `port` is: 8000.
+Default local (not public!) of this Connector application's listening `port` is: 6000.
 
 Make sure ngrok is running as per previous section.
 
+#### Next steps - Voice API Application
+
+**Either** follow instructions in the [**sample Voice API Application**](https://github.com/nexmo-se/voice-to-ai-engines) repository for the next steps,
+
+**or** instead update and use **your existing Voice API application** to connect voice calls via [WebSockets](https://developer.vonage.com/en/voice/voice-api/concepts/websockets) to this Connector Application.
 
 ### Hosted deployment on Vonage Cloud Runtime
 
-You may deploy on Vonage's serverless infrastructure [Vonage Cloud Runtime](https://developer.vonage.com/en/vonage-cloud-runtime/overview).
+You may deploy this Connector application on Vonage's serverless infrastructure [Vonage Cloud Runtime](https://developer.vonage.com/en/vonage-cloud-runtime/overview) (VCR).
 
-WIP - Instructions will be added here in a few days. Sorry for the delay.
-
-
-## How to test this application
-
-### Inbound PSTN call
-
-Call the phone number linked to your Vonage API account.
-
-### Outbound PSTN call
-
-You may trigger an outbound call by opening the following web address<br>
-`https://<public_host_name>/call?callee=<callee_phone_number>`<br>
-
-for example:<br>
-`https://xxxxxxxx.ngrok.io/call?callee=12995550101`<br>
-or<br>
-`https://myserver.mycompany.com:32000/call?callee=12995550101`<br>
+WIP - Instructions will be added here. Sorry for the delay.
 
 
-## Live demo
-
-You may test call a demo instance of this application running on [Vonage Cloud Runtime](https://developer.vonage.com/en/vonage-cloud-runtime/overview) by calling<br> +1 **201-365-7974**.
 
 
 
