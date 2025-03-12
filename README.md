@@ -21,16 +21,14 @@ See the diagram **_dg-oai-11l-architecture-overview.png_**.</br>
 
 In this diagram, the Connector application is shown on the left side of the diagram.</br>
 
-First, a call is established with the User, it can be an inbound call or an outbound call,</br>
-then a [WebSocket](https://developer.vonage.com/en/voice/voice-api/concepts/websockets) leg is established with the Connector which sends the audio from the User to Deepgram STT.</br>
+First, a call is established with the User, it can be an inbound call or an outbound call, that initial leg maybe of type PSTN, SIP, WebRTC, or WebSocket</br>
+then a [WebSocket](https://developer.vonage.com/en/voice/voice-api/concepts/websockets) leg is established with the Connector which sends the audio from the User to Deepgram for STT (Speech-to-Text).</br>
 
-Original speech transcripts reveived from Deegram are sent to OpenAI.</br>
+User's speech transcripts received from Deegram are sent to OpenAI (LLM).</br>
 
-Text responses received from OpenAI are sent to ElevenLabs.</br>
+Text responses received from OpenAI are sent to ElevenLabs for TTS (Text-to-Speech).</br>
 
-Speech synthesis received from ElevenLabs are sent to the User through the WebSocket leg and the original voice channel leg.</br>
-
-Received audio from DG VA are sent to the User.</br>
+Speech synthesis received from ElevenLabs are sent to the User through the same WebSocket leg and the original voice channel leg.</br>
 
 Optionally, User's original speech transcripts and Agent's text responses are forwarded to the Voice API application.</br>
 
@@ -74,20 +72,21 @@ This application has been tested with Node.js version 18.19.
 
 #### Ngrok
 
-For a `local deployment`, you may use ngrok (an agent endpoint service) for both this Connector application and the sample [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines) with [multiple ngrok agent endpoints](https://ngrok.com/docs/traffic-policy/getting-started/agent-endpoints/config-file/).
+For a `local deployment`, you may use ngrok (an _agent endpoint_ service) for both this Connector application and the sample [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines) with [multiple ngrok agent endpoints](https://ngrok.com/docs/traffic-policy/getting-started/agent-endpoints/config-file/).
 
-[Download and install ngrok](https://ngrok.com/downloads).</br>
+To do that, [download and install ngrok](https://ngrok.com/downloads).</br>
 Sign in or sign up with [ngrok](https://ngrok.com/), follow the [Quickstart](https://ngrok.com/docs/getting-started/) guide.
 
 Set up two domains, one to forward to the local port 6000 (as this Connector application will be listening on port 6000), the other one to the local port 8000 for the sample [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines).
 
 
-Start ngrok to start both tunnels that forward to local ports 6000 and 8000,</br>
+Run ngrok to start both _agent endpoints_ that forward to local ports 6000 and 8000,</br>
 please take note of the ngrok **Enpoint URL** that forwards to local port 6000 as it will be needed when setting the [Voice API application](https://github.com/nexmo-se/voice-app-websockets),
 that URL looks like:</br>
-`xxxxxxxx.ngrok.io`, `myserver.mycompany.com:32000`  (as **`PROCESSOR_SERVER`** in the .env file of the [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines)),</br>
+`xxxxxxxx.ngrok.io`</br>
+(that value will be the argument of **`PROCESSOR_SERVER`** in the .env file of the sample [Voice API application](https://github.com/nexmo-se/voice-to-ai-engines)),</br>
 no `port` is necessary with ngrok as public hostname,</br>
-that host name to specify must not have leading protocol text such as https://, wss://, nor trailing /.
+that host name to specify must not have leading protocol text such as `https://`, `wss://`, nor trailing `/`.
 
 #### Remaining setup and application launch
 
