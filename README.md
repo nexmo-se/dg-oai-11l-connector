@@ -1,4 +1,4 @@
-# Interacting via Voice with an OpenAI LLM using Deepgram ASR and ElevenLabs TTS
+# Interacting via Voice with an OpenAI LLM using Vonage Voice/Video API, Deepgram ASR and ElevenLabs TTS
 
 ## What this Connector application does
 
