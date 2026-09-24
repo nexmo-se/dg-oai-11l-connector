@@ -32,7 +32,7 @@ Speech synthesis received from ElevenLabs are sent to the User through the same 
 
 Optionally, User's original speech transcripts and Agent's text responses are forwarded to the Voice API application.</br>
 
-See https://github.com/nexmo-se/voice-to-ai-engines for a **sample Voice API application** using this Connector code to stream audio from voice calls to Deepgram ASR engine.
+See https://github.com/nexmo-se/voice-to-ai-engines or https://github.com/nexmo-se/ai-assisted-calls for a **sample Voice API application** using this Connector code to stream audio from voice calls to Deepgram ASR engine.
 
 ## Prerequisites
 
@@ -105,10 +105,16 @@ Install necessary node modules with the command:<br>
 npm install
 ```
 
-Launch this Connector application:<br>
+If peer voice application is from https://github.com/nexmo-se/voice-to-ai-engines, launch this Connector application:<br>
 ```bash
 node dg-oai-11l-connector.cjs
 ```
+
+If peer voice application is from https://github.com/nexmo-se/ai-assisted-calls, launch this Connector application:<br>
+```bash
+node dg-oai-11l-connector-toolcalls.cjs
+```
+
 Default local (not public!) of this Connector application's listening `port` is: 6000.
 
 Make sure ngrok is running as per previous section.
@@ -119,11 +125,6 @@ Make sure ngrok is running as per previous section.
 
 **or** instead update and use **your existing Voice API application** to connect voice calls via [WebSockets](https://developer.vonage.com/en/voice/voice-api/concepts/websockets) to this Connector Application.
 
-### Hosted deployment on Vonage Cloud Runtime
-
-You may deploy this Connector application on Vonage's serverless infrastructure [Vonage Cloud Runtime](https://developer.vonage.com/en/vonage-cloud-runtime/overview) (VCR).
-
-WIP - Instructions will be added here. Sorry for the delay.
 
 
 
