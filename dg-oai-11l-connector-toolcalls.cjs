@@ -537,9 +537,7 @@ app.ws('/socket', async (ws, req) => {
             for await (const chunk of completion) {
 
               // console.log('\n>>> chunk:', chunk);
-              console.log('>>> chunk.choices[0]:', chunk.choices[0]);
-              // console.log('>>> chunk.choices[0].delta:', chunk.choices[0].delta);
-              // console.log('>>> chunk.choices[0].delta.content:', chunk.choices[0].delta.content);
+              // console.log('>>> chunk.choices[0]:', chunk.choices[0]);
 
               if (chunk.choices[0]?.delta?.content == '') {
                 startSpeech = false;  // no barge-in yet when starting sending text to TTS engine
