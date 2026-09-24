@@ -6,6 +6,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser')
 const webSocket = require('ws');
+const axios = require('axios');
 const app = express();
 require('express-ws')(app);
 
@@ -58,6 +59,18 @@ const elevenLabsModel = process.env.ELEVENLABS_MODEL;
 const elevenLabsInactivityTimer = 180; // in seconds, 180 max, default is 20
 const elevenLabsKeepAliveTimer = 150000; // in milliseconds, must be less than elevenLabsInactivityTimer value
 
+//--- Unhandled rejections/exceptions ---
+
+process.on("unhandledRejection", (reason, promise) => {
+    console.error("❌ Unhandled promise rejection (caught by safety net):", reason);
+    // Log but do NOT call process.exit() — keeps the app running
+});
+
+process.on("uncaughtException", (err) => {
+    console.error("❌ Uncaught exception:", err);
+    // Optionally restart or gracefully shut down here
+});
+
 //--- Streaming timer calculation ---
 
 let prevTime = Date.now();
@@ -83,6 +96,107 @@ const streamTimer = setInterval ( () => {
 
 }, timer);
 
+//--- OpenAI-related functions ---
+
+/**
+ * Retries an async function with exponential backoff.
+ * Only retries on transient 429 rate-limits, NOT on credit exhaustion or other errors.
+ *
+ * @param {() => Promise<T>} fn        - The async function to retry
+ * @param {object}           options
+ * @param {number}           options.maxRetries  - Max number of retry attempts (default: 4)
+ * @param {number}           options.baseDelayMs - Initial delay in ms, doubles each attempt (default: 1000)
+ * @param {number}           options.maxDelayMs  - Cap on delay between retries (default: 30000)
+ * @returns {Promise<T>}
+ */
+async function withRetry(fn, { maxRetries = 4, baseDelayMs = 1000, maxDelayMs = 30000 } = {}) {
+    let attempt = 0;
+
+    while (true) {
+        try {
+            return await fn();
+        } catch (err) {
+            const isRateLimit = err instanceof OpenAI.APIError && err.status === 429;
+            const isCreditExhausted = err?.code === "credit_balance_exhausted";
+            const isRetryable = isRateLimit && !isCreditExhausted;
+
+            if (!isRetryable || attempt >= maxRetries) {
+                // Hard fail: not retryable, or out of attempts
+                handleOpenAIError(err);
+                throw err;
+            }
+
+            // Exponential backoff with jitter
+            const jitter = Math.random() * 500;
+            const delay = Math.min(baseDelayMs * 2 ** attempt + jitter, maxDelayMs);
+
+            console.warn(
+                `⚠️  OpenAI rate limit hit. Retrying in ${(delay / 1000).toFixed(1)}s... ` +
+                `(attempt ${attempt + 1}/${maxRetries})`
+            );
+
+            await new Promise(res => setTimeout(res, delay));
+            attempt++;
+        }
+    }
+}
+
+/**
+ * Centralized OpenAI error handler — logs a clear message per error type.
+ * @param {unknown} err
+ */
+function handleOpenAIError(err) {
+    if (!(err instanceof OpenAI.APIError)) {
+        console.error("❌ Unexpected error:", err);
+        return;
+    }
+
+    switch (err.status) {
+        case 429:
+            if (err.code === "credit_balance_exhausted") {
+                console.error(
+                    "❌ OpenAI credit balance exhausted. Add credits at: " +
+                    "https://platform.openai.com/settings/organization/billing/"
+                );
+            } else {
+                console.error("❌ OpenAI rate limit: max retries exceeded.");
+            }
+            break;
+        case 401:
+            console.error("❌ OpenAI authentication failed. Check your API key.");
+            break;
+        case 500:
+        case 503:
+            console.error("❌ OpenAI server error. Try again later.");
+            break;
+        default:
+            console.error(`❌ OpenAI API error [${err.status}]: ${err.message}`);
+    }
+}
+
+//--
+
+const oaiTools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "connect_to_live_person",
+      "description": "Call this tool when the user explicitly asks to speak to a human representative, sounds highly frustrated, has a complex request the AI cannot resolve, or the humam representative wants to get connected to the customer.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Brief summary of why the call is being transferred."
+          }
+        },
+        "required": ["reason"]
+      }
+    }
+  }
+]
+
+//=========================================================================
 
 //--- Websocket server (for WebSockets from Vonage Voice API platform) ---
 
@@ -91,14 +205,17 @@ app.ws('/socket', async (ws, req) => {
   //-- debug only --
   let ttsSeq = 0;
 
-
   //-----
 
-  const peerUuid = req.query.peer_uuid;
+  const webhookBaseUrl = req.query.webhook_base_url || null; // base URL to make webhook calls to Voice API application, such as call transfer requests
+  const sessionId = req.query.session || 'none'; // session id that ties related call legs (leg uuids)
+  const participant = req.query.participant || 'none';  // e.g. "customer", "human_agent", "patient", "doctor", "nurse"
+
   let elevenLabsTimer;
 
   console.log('>>> WebSocket from Vonage platform')
-  console.log('>>> peer call uuid:', peerUuid);
+  console.log('>>> webhook base URL:', webhookBaseUrl);
+  console.log('>>> participant:', participant);
 
   let wsVgOpen = true; // WebSocket to Vonage ready for binary audio payload?
 
@@ -110,8 +227,8 @@ app.ws('/socket', async (ws, req) => {
   let newResponseStart = '';  // first sentence of OpenAI new streamed responsse
 
   //-- audio recording files -- 
-  const audioToDgFileName = './recordings/' + peerUuid + '_rec_to_dg_' + moment(Date.now()).format('YYYY_MM_DD_HH_mm_ss_SSS') + '.raw'; // using local time
-  const audioToVgFileName = './recordings/' + peerUuid + '_rec_to_vg_' + moment(Date.now()).format('YYYY_MM_DD_HH_mm_ss_SSS') + '.raw'; // using local time
+  const audioToDgFileName = './recordings/' + sessionId + '_rec_to_dg_' + moment(Date.now()).format('YYYY_MM_DD_HH_mm_ss_SSS') + '.raw'; // using local time
+  const audioToVgFileName = './recordings/' + sessionId + '_rec_to_vg_' + moment(Date.now()).format('YYYY_MM_DD_HH_mm_ss_SSS') + '.raw'; // using local time
 
   if (recordAllAudio) { 
 
@@ -368,94 +485,183 @@ app.ws('/socket', async (ws, req) => {
 
           console.log('\n>>>', Date.now(), 'Sending Deepgram transcript to OpenAI as request: "' + dgTranscript + '"');
 
-          const completion = await openAi.chat.completions.create({
-              model: oaiModel,
-              messages: [
-                  { role: "developer", content: oaiSystemMessage },
-                  {
-                      role: "user",
-                      content: dgTranscript,
-                  },
-              ],
-              stream: true
-          });
+          // const completion = await openAi.chat.completions.create({
+          //     model: oaiModel,
+          //     messages: [
+          //         { role: "developer", content: oaiSystemMessage },
+          //         {
+          //             role: "user",
+          //             content: dgTranscript,
+          //         },
+          //     ],
+          //     stream: true
+          // });
 
-          dgTranscript = "";
+          try {
+
+            const completion = await withRetry(() =>
+              openAi.chat.completions.create({
+                model: oaiModel,
+                messages: [
+                    { role: "developer", content: oaiSystemMessage },
+                    { role: "user", content: dgTranscript },
+                ],
+                tools: oaiTools,
+                tool_choice: "auto",
+                stream: true,
+                store: true,
+                metadata: {
+                  session: sessionId,
+                  party: participant
+                }
+              })
+            );
+
+            dgTranscript = "";
 
 
-          //-- this is with stream: false --
-          // const oAiTextResponse = completion.choices[0].message.content;
-          // console.log('\n>>> OpenAI response:', oAiTextResponse);
-          // if (ws11LabsOpen) {
-          //   console.log('\n\n>>>', Date.now(), 'Sending OpenAI response to ElevenLabs for TTS:\n', oAiTextResponse);
-          //   elevenLabsWs.send(JSON.stringify({text: oAiTextResponse}));
-          // }
+            //-- this is with stream: false --
+            // const oAiTextResponse = completion.choices[0].message.content;
+            // console.log('\n>>> OpenAI response:', oAiTextResponse);
+            // if (ws11LabsOpen) {
+            //   console.log('\n\n>>>', Date.now(), 'Sending OpenAI response to ElevenLabs for TTS:\n', oAiTextResponse);
+            //   elevenLabsWs.send(JSON.stringify({text: oAiTextResponse}));
+            // }
 
-          //-- this is with stream: true -- handle barge-in too ---
-          console.log("\n");
+            //-- this is with stream: true -- handle barge-in too ---
+            console.log("\n");
 
-          let oAiSentence = '';
+            let oAiSentence = '';
+            let oAiToolCalls = '';
 
-          for await (const chunk of completion) {
+            for await (const chunk of completion) {
 
-            if (chunk.choices[0]?.delta?.content == '') {
-              startSpeech = false;  // no barge-in yet when starting sending text to TTS engine
-            }
+              // console.log('\n>>> chunk:', chunk);
+              console.log('>>> chunk.choices[0]:', chunk.choices[0]);
+              // console.log('>>> chunk.choices[0].delta:', chunk.choices[0].delta);
+              // console.log('>>> chunk.choices[0].delta.content:', chunk.choices[0].delta.content);
 
-            //-- send text to ElevenLabs 
-            // if ( (chunk.choices[0]?.delta?.content != undefined) && (chunk.choices[0]?.delta?.content != '')) {
-            if ( chunk.choices[0]?.delta?.content != undefined ) {
-
-              if (startSpeech) {  // barge-in
-                
-                // flag used to drop remaining TTS response packets from previous request
-                dropTtsChunks = true;
-                
-                break;  // stop sending text response chunks to ElevenLabs
+              if (chunk.choices[0]?.delta?.content == '') {
+                startSpeech = false;  // no barge-in yet when starting sending text to TTS engine
               }
-     
-              const oAiResponseChunk = chunk.choices[0]?.delta?.content;
-              process.stdout.write(oAiResponseChunk);
 
-              oAiSentence = oAiSentence + oAiResponseChunk;
+              //-- send text to ElevenLabs 
+              // if ( (chunk.choices[0]?.delta?.content != undefined) && (chunk.choices[0]?.delta?.content != '')) {
+              if ( chunk.choices[0]?.delta?.content != undefined ) {
 
-              // faster response time for English
-              // TBD: find possible end of sentence markers in other languages
-              if (oAiResponseChunk == '.' || oAiResponseChunk == '?' || oAiResponseChunk == '!') {
-
-                if (newResponseStart == '') {
-                  newResponseStart = oAiSentence; // set with first sentence of OpenAI response
+                if (startSpeech) {  // barge-in
+                  
+                  // flag used to drop remaining TTS response packets from previous request
+                  dropTtsChunks = true;
+                  
+                  break;  // stop sending text response chunks to ElevenLabs
                 }
 
-                elevenLabsWs.send(JSON.stringify({text: oAiSentence})); 
-                
-                oAiSentence = '';  
-                process.stdout.write('\n');      
-              }
-            
-            }
+       
+                const oAiResponseChunk = chunk.choices[0]?.delta?.content;
+                process.stdout.write(oAiResponseChunk);
 
-            //--- end of text response stream from OpenAI 
-            if (chunk.choices[0]?.delta?.content == undefined) {
+                oAiSentence = oAiSentence + oAiResponseChunk;
 
-              // in case no character '.', '?', or '!' was found, send sentence(s) to ElevenLabs
-              if (oAiSentence != '') {
 
-                if (newResponseStart == '') {
-                  newResponseStart = oAiSentence; // set with first sentence of OpenAI response
+                // faster response time for English
+                // TBD: find possible end of sentence markers in other languages
+                if (oAiResponseChunk == '.' || oAiResponseChunk == '?' || oAiResponseChunk == '!') {
+
+                  if (newResponseStart == '') {
+                    newResponseStart = oAiSentence; // set with first sentence of OpenAI response
+                  }
+
+                  elevenLabsWs.send(JSON.stringify({text: oAiSentence})); 
+                  
+                  oAiSentence = '';  
+                  process.stdout.write('\n');      
                 }
-                
-                elevenLabsWs.send(JSON.stringify({text: oAiSentence})); 
-                
-                oAiSentence = '';
-              }    
+              
+              }
 
-              //-- can send OpenAI response chunks to ElevenLabs again
-              startSpeech = false;     
+              //--- end of text response stream from OpenAI 
+              if (chunk.choices[0]?.delta?.content == undefined) {
 
-            }
+                // in case no character '.', '?', or '!' was found, send sentence(s) to ElevenLabs
+                if (oAiSentence != '') {
 
-          } // closing bracket for await
+                  if (newResponseStart == '') {
+                    newResponseStart = oAiSentence; // set with first sentence of OpenAI response
+                  }
+                  
+                  elevenLabsWs.send(JSON.stringify({text: oAiSentence})); 
+                  
+                  oAiSentence = '';
+                }    
+
+                //-- can send OpenAI response chunks to ElevenLabs again
+                startSpeech = false;     
+
+              }
+
+              //--- tool calls ---
+
+              if (chunk.choices[0]?.delta?.tool_calls != undefined) {
+
+                const utteranceFunction = chunk.choices[0]?.delta.tool_calls[0].function.arguments;
+
+                oAiToolCalls = oAiToolCalls + JSON.stringify(utteranceFunction, null, 2);
+
+              } 
+
+              //--- end of tool calls messages --
+
+              if (chunk.choices[0]?.finish_reason == "tool_calls") {
+
+                const toolReason = oAiToolCalls.replace(/\\("|)|"/g, '\$1');
+
+                console.log(">>> tool reason:", toolReason);
+
+                console.log('>>> here - trigger webhook to voice app with the info from tool calls')
+                // play tool reason to human agent
+
+                // play announcement to customer - Not yet working at the moment
+                // dropTtsChunks = true;
+                // elevenLabsWs.send(JSON.stringify({text: "Transferring your call now to human agent, please wait."})); 
+
+                console.log('>>> trigger webhook to voice app with the info from tool calls')
+                // play tool reason to human agent
+                const info = {
+                  session: sessionId,
+                  participant: participant,
+                  toolReason: JSON.parse(toolReason)
+                };
+
+                console.log(">>> info:\n" + JSON.stringify(info));
+
+                try {
+                  const status = await axios.post(`${webhookBaseUrl}/transfer`, info,
+                    {
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                      }
+                    });
+                  // console.log("HTTP POST status:", status);
+                } 
+                catch (err) {
+                  console.log("HTTP POST  error: ", err);
+                }
+              
+              }
+
+            } // closing bracket for await
+
+          } catch (err) {
+            // withRetry already logged the specific error — just prevent the crash
+            console.error("❌ OpenAI call failed, skipping this transcript segment.");
+            // Do NOT re-throw here — that would crash the process
+
+            // check why this part is not working
+            // startSpeech = true; 
+            // elevenLabsWs.send(JSON.stringify({text: "Could not connect to LLM"})); 
+          }  
         
         }  // closing bracket for if dgTranscript ...
       
